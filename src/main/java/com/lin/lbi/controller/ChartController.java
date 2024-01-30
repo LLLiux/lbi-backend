@@ -1,5 +1,6 @@
 package com.lin.lbi.controller;
 
+import cn.hutool.core.io.FileUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.gson.Gson;
 import com.lin.lbi.annotation.AuthCheck;
@@ -11,9 +12,11 @@ import com.lin.lbi.constant.UserConstant;
 import com.lin.lbi.exception.BusinessException;
 import com.lin.lbi.exception.ThrowUtils;
 import com.lin.lbi.manager.AIManager;
+import com.lin.lbi.manager.RedissonManager;
 import com.lin.lbi.model.dto.chart.*;
 import com.lin.lbi.model.entity.Chart;
 import com.lin.lbi.model.entity.User;
+import com.lin.lbi.model.vo.AIResponse;
 import com.lin.lbi.service.ChartService;
 import com.lin.lbi.service.UserService;
 import com.lin.lbi.utils.ExcelUtils;
@@ -25,6 +28,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * 帖子接口
@@ -45,6 +50,13 @@ public class ChartController {
     @Resource
     private AIManager aiManager;
 
+    @Resource
+    private RedissonManager redissonManager;
+
+    private static final Long FILE_SIZE_LIMIT = 1024 * 1024L;
+
+    private static final List<String> VALID_FILE_SUFFIX_LIST = Arrays.asList("xlsx");
+
     private final static Gson GSON = new Gson();
 
     /**
@@ -56,45 +68,56 @@ public class ChartController {
      * @return
      */
     @PostMapping("/generateByAI")
-    public BaseResponse<String> generateByAI(@RequestPart("file") MultipartFile multipartFile,
-                                             UploadChartRequest uploadChartRequest, HttpServletRequest request) {
+    public BaseResponse<AIResponse> generateByAI(@RequestPart("file") MultipartFile multipartFile,
+                                                 UploadChartRequest uploadChartRequest, HttpServletRequest request) {
+        // 校验
         String goal = uploadChartRequest.getGoal();
         ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "分析目标为空");
         ThrowUtils.throwIf(goal.length() > 1000, ErrorCode.PARAMS_ERROR, "分析目标过长");
-
         String chartName = uploadChartRequest.getChartName();
         ThrowUtils.throwIf(StringUtils.isNotBlank(chartName) && chartName.length() > 100, ErrorCode.PARAMS_ERROR, "图表名称过长");
-
-        String chartType = uploadChartRequest.getChartType();
+        ThrowUtils.throwIf(multipartFile.getSize() > FILE_SIZE_LIMIT, ErrorCode.PARAMS_ERROR, "上传文件过大");
+        String fileSuffix = FileUtil.getSuffix(multipartFile.getOriginalFilename());
+        ThrowUtils.throwIf(!VALID_FILE_SUFFIX_LIST.contains(fileSuffix), ErrorCode.PARAMS_ERROR, "上传文件不符合要求");
+        // 限流
+        User loginUser = userService.getLoginUser(request);
+        String rateLimitKey = "generateByAI_" + loginUser.getId();
+        redissonManager.doRateLimit(rateLimitKey);
+        // 处理上传文件
         String data = ExcelUtils.excelToCsv(multipartFile);
-
+        // 添加数据库
+        String chartType = uploadChartRequest.getChartType();
         ChartAddRequest chartAddRequest = new ChartAddRequest();
         chartAddRequest.setData(data);
         chartAddRequest.setGoal(goal);
         chartAddRequest.setChartName(chartName);
         chartAddRequest.setChartType(chartType);
         Long chartId = addChart(chartAddRequest, request).getData();
-
+        // 拼接输入
         StringBuilder input = new StringBuilder();
         input.append("分析需求：").append("\n").append(goal);
         input.append("原始数据：").append("\n").append(data);
-
         if (StringUtils.isNotBlank(chartType)) {
             input.append("图表类型：").append("\n").append(chartType);
         }
-
+        // 调用 AI
         String result = aiManager.doChat(input.toString());
         String[] split = result.split("【【【");
         ThrowUtils.throwIf(split.length < 3, ErrorCode.SYSTEM_ERROR, "AI 生成失败");
-
+        // 获取结果并更新数据库
         Chart chart = new Chart();
         chart.setId(chartId);
         chart.setGenChart(split[1]);
         chart.setGenResult(split[2]);
         boolean update = chartService.updateById(chart);
         ThrowUtils.throwIf(!update, ErrorCode.SYSTEM_ERROR, "数据库更新失败");
+        // 返回 VO
+        AIResponse aiResponse = new AIResponse();
+        aiResponse.setId(chartId);
+        aiResponse.setGenChart(split[1]);
+        aiResponse.setGenResult(split[2]);
 
-        return ResultUtils.success(result);
+        return ResultUtils.success(aiResponse);
     }
 
     // region 增删改查

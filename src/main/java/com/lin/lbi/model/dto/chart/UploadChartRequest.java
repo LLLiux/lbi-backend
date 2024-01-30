@@ -1,30 +1,17 @@
 package com.lin.lbi.model.dto.chart;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
 import lombok.Data;
 
 import java.io.Serializable;
-import java.util.List;
 
 /**
- * 编辑请求
+ * 文件上传请求
  *
  * @author L
  *
  */
 @Data
-public class ChartEditRequest implements Serializable {
-
-    /**
-     * id
-     */
-    private Long id;
-
-    /**
-     * 分析数据
-     */
-    private String data;
+public class UploadChartRequest implements Serializable {
 
     /**
      * 分析目标
@@ -40,7 +27,6 @@ public class ChartEditRequest implements Serializable {
      * 图表类型
      */
     private String chartType;
-
 
     private static final long serialVersionUID = 1L;
 }

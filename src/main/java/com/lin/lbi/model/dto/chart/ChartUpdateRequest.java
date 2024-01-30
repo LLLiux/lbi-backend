@@ -1,13 +1,9 @@
 package com.lin.lbi.model.dto.chart;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableLogic;
 import lombok.Data;
 
 import java.io.Serializable;
 import java.util.Date;
-import java.util.List;
 
 /**
  * 更新请求
@@ -32,6 +28,11 @@ public class ChartUpdateRequest implements Serializable {
      * 分析目标
      */
     private String goal;
+
+    /**
+     * 图表名称
+     */
+    private String chartName;
 
     /**
      * 图表类型

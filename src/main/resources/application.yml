@@ -25,12 +25,12 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   # Redis 配置
   # todo 需替换配置，然后取消注释
-#  redis:
-#    database: 1
-#    host: localhost
-#    port: 6379
-#    timeout: 5000
-#    password: 123456
+  #  redis:
+  #    database: 1
+  #    host: localhost
+  #    port: 6379
+  #    timeout: 5000
+  #    password: 123456
   # 文件上传
   servlet:
     multipart:
@@ -62,3 +62,7 @@ cos:
     secretKey: xxx
     region: xxx
     bucket: xxx
+yuapi:
+  client:
+    access-key: 4vi0t1596rkeirth2uljme6pn2d7t3bn
+    secret-key: q1gm3alwrj5ha9oulxc5iy0lzu2xezeu

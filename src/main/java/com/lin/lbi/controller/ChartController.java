@@ -16,6 +16,7 @@ import com.lin.lbi.manager.RedissonManager;
 import com.lin.lbi.model.dto.chart.*;
 import com.lin.lbi.model.entity.Chart;
 import com.lin.lbi.model.entity.User;
+import com.lin.lbi.model.enums.AIGenerateStatusEnum;
 import com.lin.lbi.model.vo.AIResponse;
 import com.lin.lbi.service.ChartService;
 import com.lin.lbi.service.UserService;
@@ -30,6 +31,8 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 帖子接口
@@ -53,14 +56,17 @@ public class ChartController {
     @Resource
     private RedissonManager redissonManager;
 
+    @Resource
+    private ThreadPoolExecutor threadPoolExecutor;
+
     private static final Long FILE_SIZE_LIMIT = 1024 * 1024L;
 
-    private static final List<String> VALID_FILE_SUFFIX_LIST = Arrays.asList("xlsx");
+    private static final List<String> VALID_FILE_SUFFIX_LIST = Arrays.asList("xlsx", "xls");
 
     private final static Gson GSON = new Gson();
 
     /**
-     * 文件上传
+     * AI 生成（线程池异步）
      *
      * @param multipartFile
      * @param uploadChartRequest
@@ -69,7 +75,7 @@ public class ChartController {
      */
     @PostMapping("/generateByAI")
     public BaseResponse<AIResponse> generateByAI(@RequestPart("file") MultipartFile multipartFile,
-                                                 UploadChartRequest uploadChartRequest, HttpServletRequest request) {
+                                                      UploadChartRequest uploadChartRequest, HttpServletRequest request) {
         // 校验
         String goal = uploadChartRequest.getGoal();
         ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "分析目标为空");
@@ -79,20 +85,26 @@ public class ChartController {
         ThrowUtils.throwIf(multipartFile.getSize() > FILE_SIZE_LIMIT, ErrorCode.PARAMS_ERROR, "上传文件过大");
         String fileSuffix = FileUtil.getSuffix(multipartFile.getOriginalFilename());
         ThrowUtils.throwIf(!VALID_FILE_SUFFIX_LIST.contains(fileSuffix), ErrorCode.PARAMS_ERROR, "上传文件不符合要求");
-        // 限流
         User loginUser = userService.getLoginUser(request);
-        String rateLimitKey = "generateByAI_" + loginUser.getId();
-        redissonManager.doRateLimit(rateLimitKey);
+        Long userId = loginUser.getId();
+        // 限流
+        String rateLimitKey = "generateByAI_" + userId;
+        boolean canOp = redissonManager.doRateLimit(rateLimitKey);
+        ThrowUtils.throwIf(!canOp, ErrorCode.TOO_MANY_REQUEST);
         // 处理上传文件
         String data = ExcelUtils.excelToCsv(multipartFile);
         // 添加数据库
         String chartType = uploadChartRequest.getChartType();
-        ChartAddRequest chartAddRequest = new ChartAddRequest();
-        chartAddRequest.setData(data);
-        chartAddRequest.setGoal(goal);
-        chartAddRequest.setChartName(chartName);
-        chartAddRequest.setChartType(chartType);
-        Long chartId = addChart(chartAddRequest, request).getData();
+        Chart saveChart = new Chart();
+        saveChart.setData(data);
+        saveChart.setGoal(goal);
+        saveChart.setChartName(chartName);
+        saveChart.setChartType(chartType);
+        saveChart.setStatus(AIGenerateStatusEnum.WAITING.getValue());
+        saveChart.setUserId(userId);
+        boolean save = chartService.save(saveChart);
+        ThrowUtils.throwIf(!save, ErrorCode.SYSTEM_ERROR, "图表信息保存失败");
+        Long chartId = saveChart.getId();
         // 拼接输入
         StringBuilder input = new StringBuilder();
         input.append("分析需求：").append("\n").append(goal);
@@ -100,24 +112,51 @@ public class ChartController {
         if (StringUtils.isNotBlank(chartType)) {
             input.append("图表类型：").append("\n").append(chartType);
         }
-        // 调用 AI
-        String result = aiManager.doChat(input.toString());
-        String[] split = result.split("【【【");
-        ThrowUtils.throwIf(split.length < 3, ErrorCode.SYSTEM_ERROR, "AI 生成失败");
-        // 获取结果并更新数据库
-        Chart chart = new Chart();
-        chart.setId(chartId);
-        chart.setGenChart(split[1]);
-        chart.setGenResult(split[2]);
-        boolean update = chartService.updateById(chart);
-        ThrowUtils.throwIf(!update, ErrorCode.SYSTEM_ERROR, "数据库更新失败");
+        // 异步执行
+        CompletableFuture.runAsync(() -> {
+            Chart updateChart = new Chart();
+            updateChart.setId(chartId);
+            updateChart.setStatus(AIGenerateStatusEnum.RUNNING.getValue());
+            boolean update = chartService.updateById(updateChart);
+            if (!update) {
+                handleError(chartId, "执行状态(执行中)更新失败");
+                return;
+            }
+            // 调用 AI
+            String output = aiManager.doChat(input.toString());
+            String[] split = output.split("【【【【【");
+            if (split.length < 3) {
+                handleError(chartId, "AI 生成失败");
+                return;
+            }
+            // 获取结果并更新数据库
+            Chart result = new Chart();
+            result.setId(chartId);
+            result.setStatus(AIGenerateStatusEnum.SUCCEED.getValue());
+            result.setGenChart(split[1]);
+            result.setGenResult(split[2]);
+            boolean updateResult = chartService.updateById(result);
+            if (!updateResult) {
+                handleError(chartId, "执行状态(成功)更新失败");
+            }
+        }, threadPoolExecutor);
+
         // 返回 VO
         AIResponse aiResponse = new AIResponse();
         aiResponse.setId(chartId);
-        aiResponse.setGenChart(split[1]);
-        aiResponse.setGenResult(split[2]);
+//        aiResponse.setGenChart(split[1]);
+//        aiResponse.setGenResult(split[2]);
 
         return ResultUtils.success(aiResponse);
+    }
+
+    private void handleError(Long chartId, String message) {
+        Chart chart = new Chart();
+        chart.setId(chartId);
+        chart.setStatus(AIGenerateStatusEnum.FAILED.getValue());
+        chart.setExecMessage(message);
+        boolean update = chartService.updateById(chart);
+        ThrowUtils.throwIf(!update, ErrorCode.SYSTEM_ERROR, "数据库更新失败");
     }
 
     // region 增删改查

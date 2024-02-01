@@ -22,6 +22,7 @@ public class AIManager {
         request.setMessage(message);
 
         BaseResponse<DevChatResponse> response = client.doChat(request);
+        System.out.println(response);
         return response.getData().getContent();
     }
 }

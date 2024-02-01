@@ -19,10 +19,10 @@ public class RedissonManager {
     @Resource
     private RedissonClient redissonClient;
 
-    public void doRateLimit(String key) {
+    public boolean doRateLimit(String key) {
         RRateLimiter rateLimiter = redissonClient.getRateLimiter(key);
-        rateLimiter.trySetRate(RateType.OVERALL, 1, 120, RateIntervalUnit.SECONDS);
+        rateLimiter.trySetRate(RateType.OVERALL, 1, 60, RateIntervalUnit.SECONDS);
         boolean canOp = rateLimiter.tryAcquire(1);
-        ThrowUtils.throwIf(!canOp, ErrorCode.TOO_MANY_REQUEST);
+        return canOp;
     }
 }

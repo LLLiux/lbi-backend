@@ -22,16 +22,18 @@ create table if not exists user
 -- 图表信息表
 create table if not exists chart
 (
-    id         bigint auto_increment comment 'id' primary key,
-    data       text                               not null comment '分析数据',
-    goal       text                               not null comment '分析目标',
-    chartName  varchar(128)                       null comment '图表名称',
-    chartType  varchar(128)                       null comment '图表类型',
-    genChart   text                               null comment '生成的图表结果',
-    genResult  text                               null comment '生成的分析结果',
-    userId     bigint                             not null comment '创建用户 id',
-    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
-    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
-    isDelete   tinyint  default 0                 not null comment '是否删除',
+    id          bigint auto_increment comment 'id' primary key,
+    data        text                               not null comment '分析数据',
+    goal        text                               not null comment '分析目标',
+    chartName   varchar(128)                       null comment '图表名称',
+    chartType   varchar(128)                       null comment '图表类型',
+    status      int      default 0                 not null comment '执行状态（0-等待中 1-执行中 2-成功 3-失败）',
+    execMessage text                               null comment '执行信息',
+    genChart    text                               null comment '生成的图表结果',
+    genResult   text                               null comment '生成的分析结果',
+    userId      bigint                             not null comment '创建用户 id',
+    createTime  datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime  datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete    tinyint  default 0                 not null comment '是否删除',
     index idx_userId (userId)
 ) comment '图表信息' collate = utf8mb4_unicode_ci;

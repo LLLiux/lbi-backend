@@ -1,7 +1,5 @@
 package com.lin.lbi.manager;
 
-import com.lin.lbi.common.ErrorCode;
-import com.lin.lbi.exception.ThrowUtils;
 import org.redisson.api.RRateLimiter;
 import org.redisson.api.RateIntervalUnit;
 import org.redisson.api.RateType;

@@ -18,6 +18,7 @@ import com.lin.lbi.model.entity.Chart;
 import com.lin.lbi.model.entity.User;
 import com.lin.lbi.model.enums.AIGenerateStatusEnum;
 import com.lin.lbi.model.vo.AIResponse;
+import com.lin.lbi.mq.BIMessageProducer;
 import com.lin.lbi.service.ChartService;
 import com.lin.lbi.service.UserService;
 import com.lin.lbi.utils.ExcelUtils;
@@ -59,6 +60,9 @@ public class ChartController {
     @Resource
     private ThreadPoolExecutor threadPoolExecutor;
 
+    @Resource
+    private BIMessageProducer biMessageProducer;
+
     private static final Long FILE_SIZE_LIMIT = 1024 * 1024L;
 
     private static final List<String> VALID_FILE_SUFFIX_LIST = Arrays.asList("xlsx", "xls");
@@ -73,9 +77,9 @@ public class ChartController {
      * @param request
      * @return
      */
-    @PostMapping("/generateByAI")
-    public BaseResponse<AIResponse> generateByAI(@RequestPart("file") MultipartFile multipartFile,
-                                                      UploadChartRequest uploadChartRequest, HttpServletRequest request) {
+    @PostMapping("/generateByAI/ThreadPool")
+    public BaseResponse<AIResponse> generateByAIUsingThreadPool(@RequestPart("file") MultipartFile multipartFile,
+                                                                UploadChartRequest uploadChartRequest, HttpServletRequest request) {
         // 校验
         String goal = uploadChartRequest.getGoal();
         ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "分析目标为空");
@@ -140,6 +144,50 @@ public class ChartController {
                 handleError(chartId, "执行状态(成功)更新失败");
             }
         }, threadPoolExecutor);
+
+        // 返回 VO
+        AIResponse aiResponse = new AIResponse();
+        aiResponse.setId(chartId);
+//        aiResponse.setGenChart(split[1]);
+//        aiResponse.setGenResult(split[2]);
+
+        return ResultUtils.success(aiResponse);
+    }
+
+    @PostMapping("/generateByAI/MQ")
+    public BaseResponse<AIResponse> generateByAIUsingMQ(@RequestPart("file") MultipartFile multipartFile,
+                                                        UploadChartRequest uploadChartRequest, HttpServletRequest request) {
+        // 校验
+        String goal = uploadChartRequest.getGoal();
+        ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "分析目标为空");
+        ThrowUtils.throwIf(goal.length() > 1000, ErrorCode.PARAMS_ERROR, "分析目标过长");
+        String chartName = uploadChartRequest.getChartName();
+        ThrowUtils.throwIf(StringUtils.isNotBlank(chartName) && chartName.length() > 100, ErrorCode.PARAMS_ERROR, "图表名称过长");
+        ThrowUtils.throwIf(multipartFile.getSize() > FILE_SIZE_LIMIT, ErrorCode.PARAMS_ERROR, "上传文件过大");
+        String fileSuffix = FileUtil.getSuffix(multipartFile.getOriginalFilename());
+        ThrowUtils.throwIf(!VALID_FILE_SUFFIX_LIST.contains(fileSuffix), ErrorCode.PARAMS_ERROR, "上传文件不符合要求");
+        User loginUser = userService.getLoginUser(request);
+        Long userId = loginUser.getId();
+        // 限流
+        String rateLimitKey = "generateByAI_" + userId;
+        boolean canOp = redissonManager.doRateLimit(rateLimitKey);
+        ThrowUtils.throwIf(!canOp, ErrorCode.TOO_MANY_REQUEST);
+        // 处理上传文件
+        String data = ExcelUtils.excelToCsv(multipartFile);
+        // 添加数据库
+        String chartType = uploadChartRequest.getChartType();
+        Chart saveChart = new Chart();
+        saveChart.setData(data);
+        saveChart.setGoal(goal);
+        saveChart.setChartName(chartName);
+        saveChart.setChartType(chartType);
+        saveChart.setStatus(AIGenerateStatusEnum.WAITING.getValue());
+        saveChart.setUserId(userId);
+        boolean save = chartService.save(saveChart);
+        ThrowUtils.throwIf(!save, ErrorCode.SYSTEM_ERROR, "图表信息保存失败");
+        Long chartId = saveChart.getId();
+
+        biMessageProducer.sendMsg(String.valueOf(chartId));
 
         // 返回 VO
         AIResponse aiResponse = new AIResponse();
